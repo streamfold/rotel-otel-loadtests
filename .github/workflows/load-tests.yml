@@ -14,38 +14,336 @@ permissions: read-all
 jobs:
   update-otel-contrib:
     timeout-minutes: 5
-    runs-on: ubuntu-latest
+    runs-on:
+      - codebuild-rotel-otel-loadtests-${{ github.run_id }}-${{ github.run_attempt }}
+        image:ubuntu-7.0
+        instance-size:large
+    outputs:
+      otel_sha: ${{ steps.rebase-main.outputs.otel_sha }}
     steps:
+      - name: git config setup
+        run: |
+          git config --global user.name 'mheffner'
+          git config --global user.email 'mheffner@users.noreply.github.com'
+
       - name: clone otel-collector-contrib repos
         run: |
           git clone https://github.com/streamfold/opentelemetry-collector-contrib.git
           cd opentelemetry-collector-contrib
+          git remote set-url origin https://x-access-token:${{ secrets.OTEL_COLLECTOR_CONTRIB_ACCESS }}@github.com/streamfold/opentelemetry-collector-contrib
           git remote add upstream https://github.com/open-telemetry/opentelemetry-collector-contrib.git
           git fetch upstream
 
       - name: rebase main
-        env:
-          GITHUB_TOKEN: ${{ secrets.OTEL_COLLECTOR_CONTRIB_ACCESS }}
+        id: rebase-main
         run: |
           cd opentelemetry-collector-contrib
-          git co main
+          git checkout main
           git pull --ff-only upstream main
           git push origin main
+          echo "otel_sha=`git rev-parse --short HEAD`" >> $GITHUB_OUTPUT
 
       - name: rebase branch
-        env:
-          GITHUB_TOKEN: ${{ secrets.OTEL_COLLECTOR_CONTRIB_ACCESS }}
         run: |
           cd opentelemetry-collector-contrib
-          git co rotel-tests
+          git checkout rotel-tests
           git rebase main
           git push -f origin rotel-tests
 
   setup-environment:
     needs: [update-otel-contrib]
-    runs-on: ubuntu-latest
+    outputs:
+      otel_sha: ${{ needs.update-otel-contrib.outputs.otel_sha }}
+    runs-on:
+      - codebuild-rotel-otel-loadtests-${{ github.run_id }}-${{ github.run_attempt }}
+        image:ubuntu-7.0
+        instance-size:large
     steps:
       - name: clone test branch
         run: |
           # Shallow clone to make this fast
           git clone --depth 1 https://github.com/streamfold/opentelemetry-collector-contrib.git -b rotel-tests
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 'oldstable' # one version behind?
+
+      - name: Cache go
+        id: go-cache
+        timeout-minutes: 5
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/bin
+            ~/go/pkg/bin
+            ~/.cache/go-build
+          key: loadtest-${{ runner.os }}-go-${{ hashFiles('opentelemetry-collector-contrib/**/go.sum') }}
+
+      - name: Install Dependencies
+        if: steps.go-cache.outputs.cache-hit != 'true'
+        working-directory: opentelemetry-collector-contrib
+        run: make -j2 gomoddownload
+      - name: Install Tools
+        if: steps.go-cache.outputs.cache-hit != 'true'
+        working-directory: opentelemetry-collector-contrib
+        run: make install-tools
+      - name: make genoteltestbedcol
+        working-directory: opentelemetry-collector-contrib
+        run: make genoteltestbedcol
+      - name: make oteltestbedcol
+        working-directory: opentelemetry-collector-contrib
+        run: make oteltestbedcol
+      - name: Upload Testbed Binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: testbed-binaries
+          path: ./opentelemetry-collector-contrib/bin/*
+
+  download-rotel-artifacts:
+    runs-on:
+      - codebuild-rotel-otel-loadtests-${{ github.run_id }}-${{ github.run_attempt }}
+        image:ubuntu-7.0
+        instance-size:large
+    outputs:
+      rotel_release: ${{ steps.get-release.outputs.release_name }}
+    steps:
+      - name: Set values
+        run: |
+          echo "REPO_OWNER=streamfold" >> $GITHUB_ENV
+          echo "REPO_NAME=rotel" >> $GITHUB_ENV
+          echo "RELEASE_PATTERN=^v0.*" >> $GITHUB_ENV
+          echo "ARTIFACT_PATTERN=^rotel_v.*x86_64.*linux.*" >> $GITHUB_ENV
+          echo "DOWNLOAD_PATH=downloads" >> $GITHUB_ENV
+
+      - name: Get latest release matching pattern
+        id: get-release
+        run: |
+          # Fetch releases and filter by pattern
+          RELEASES=$(curl -s -H "Authorization: token ${{ secrets.ROTEL_DOWNLOAD_ASSETS }}" \
+            "https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/releases")
+          
+          # Find the latest release that matches the pattern
+          # Find the latest release that matches the pattern
+          # Handle null or boolean values by coalescing to empty strings for regex test
+          LATEST_RELEASE=$(echo "$RELEASES" | jq -r --arg PATTERN "$RELEASE_PATTERN" \
+            'map(select(
+              ((.name // "") | tostring | test($PATTERN)) or 
+              ((.tag_name // "") | tostring | test($PATTERN))
+            )) | sort_by(.published_at) | reverse | .[0]')
+          
+          if [ "$LATEST_RELEASE" = "null" ] || [ -z "$LATEST_RELEASE" ]; then
+            echo "No matching release found"
+            exit 1
+          fi
+          
+          # Extract relevant information
+          RELEASE_ID=$(echo "$LATEST_RELEASE" | jq -r '.id')
+          RELEASE_NAME=$(echo "$LATEST_RELEASE" | jq -r '.name')
+          RELEASE_TAG=$(echo "$LATEST_RELEASE" | jq -r '.tag_name')
+          RELEASE_URL=$(echo "$LATEST_RELEASE" | jq -r '.html_url')
+          
+          # Save to outputs and environment
+          echo "RELEASE_ID=$RELEASE_ID" >> $GITHUB_ENV
+          echo "RELEASE_NAME=$RELEASE_NAME" >> $GITHUB_ENV
+          echo "RELEASE_TAG=$RELEASE_TAG" >> $GITHUB_ENV
+          echo "RELEASE_URL=$RELEASE_URL" >> $GITHUB_ENV
+          
+          echo "release_id=$RELEASE_ID" >> $GITHUB_OUTPUT
+          echo "release_name=$RELEASE_NAME" >> $GITHUB_OUTPUT
+          echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
+          echo "release_url=$RELEASE_URL" >> $GITHUB_OUTPUT
+          
+          echo "Found matching release: $RELEASE_NAME (tag: $RELEASE_TAG)"
+
+      - name: Create download directory
+        run: mkdir -p ${{ env.DOWNLOAD_PATH }}
+
+      - name: Download release assets
+        run: |
+          # Get assets for the release
+          ASSETS=$(curl -s -H "Authorization: token ${{ secrets.ROTEL_DOWNLOAD_ASSETS }}" \
+            "https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/releases/$RELEASE_ID/assets")
+          
+          # Download each matching asset
+          echo "$ASSETS" | jq -r --arg PATTERN "$ARTIFACT_PATTERN" \
+            'map(select(.name | test($PATTERN))) | .[] | "\(.id) \(.name) \(.browser_download_url)"' | \
+          while read -r ASSET_ID ASSET_NAME ASSET_URL; do
+            echo "Downloading $ASSET_NAME..."
+            curl -s -L -H "Authorization: token ${{ secrets.ROTEL_DOWNLOAD_ASSETS }}" \
+              -H "Accept: application/octet-stream" \
+              "$ASSET_URL" -o "${{ env.DOWNLOAD_PATH }}/$ASSET_NAME"
+            echo "Downloaded $ASSET_NAME to ${{ env.DOWNLOAD_PATH }}/$ASSET_NAME"
+          done
+
+      - name: List downloaded files
+        run: |
+          echo "Downloaded assets from release ${{ env.RELEASE_NAME }} (tag: ${{ env.RELEASE_TAG }}):"
+          ls -la ${{ env.DOWNLOAD_PATH }}
+
+      - name: Upload artifacts to workflow
+        uses: actions/upload-artifact@v4
+        with:
+          name: rotel-artifacts
+          path: ${{ env.DOWNLOAD_PATH }}
+          if-no-files-found: warn
+
+  run-loadtests:
+    timeout-minutes: 20
+    runs-on:
+      - codebuild-rotel-otel-loadtests-${{ github.run_id }}-${{ github.run_attempt }}
+        image:ubuntu-7.0
+        instance-size:large
+
+    needs: [setup-environment, download-rotel-artifacts]
+
+    outputs:
+      rotel_release: ${{ needs.download-rotel-artifacts.outputs.rotel_release }}
+      otel_sha: ${{ needs.setup-environment.outputs.otel_sha }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: clone test branch
+        run: |
+          # Shallow clone to make this fast
+          git clone --depth 1 https://github.com/streamfold/opentelemetry-collector-contrib.git -b rotel-tests
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 'oldstable' # one version behind?
+
+      - name: Cache go
+        id: go-cache
+        timeout-minutes: 5
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/bin
+            ~/go/pkg/bin
+            ~/.cache/go-build
+          key: loadtest-${{ runner.os }}-go-${{ hashFiles('opentelemetry-collector-contrib/**/go.sum') }}
+
+      - name: Install rotel-otel-wrapper
+        run: |
+          go install github.com/streamfold/rotel-otel-wrapper/cmd/rotel-otel-wrapper@bb74655f86a345d8726193a7d80618efdf99a154
+
+      - name: Install go-unit-report
+        run: |
+          go install github.com/jstemmer/go-junit-report/v2@latest
+
+      - name: Install Dependencies
+        if: steps.go-cache.outputs.cache-hit != 'true'
+        working-directory: opentelemetry-collector-contrib
+        run: make -j2 gomoddownload
+      - name: Install Tools
+        if: steps.go-cache.outputs.cache-hit != 'true'
+        working-directory: opentelemetry-collector-contrib
+        run: make install-tools
+      - name: make genoteltestbedcol
+        working-directory: opentelemetry-collector-contrib
+        run: make genoteltestbedcol
+      - name: make oteltestbedcol
+        working-directory: opentelemetry-collector-contrib
+        run: make oteltestbedcol
+
+      - name: Download Testbed Binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: testbed-binaries
+          path: ./opentelemetry-collector-contrib/bin/*
+
+      - name: Download Rotel Artifacts
+        uses: actions/download-artifact@v4
+        env:
+          DOWNLOAD_PATH: "downloads"
+        with:
+          name: rotel-artifacts
+          path: ${{ env.DOWNLOAD_PATH }}
+
+      - name: extract rotel
+        env:
+          DOWNLOAD_PATH: "downloads"
+        run: |
+          cd ${{ env.DOWNLOAD_PATH }}
+          tar zxf *.tar.gz
+
+      - name: Setup env
+        env:
+          DOWNLOAD_PATH: "downloads"
+        run: |
+          echo "ROTEL_PATH=$PWD/${{ env.DOWNLOAD_PATH }}/rotel" >> $GITHUB_ENV
+          echo "ROTEL_OTEL_WRAPPER=`which rotel-otel-wrapper`" >> $GITHUB_ENV
+
+      - name: Run loadtests
+        working-directory: opentelemetry-collector-contrib
+        run: |
+          export GOJUNIT=`which go-junit-report`
+
+          cd testbed          
+          TEST_ARGS="-run ^TestRotel" ./runtests.sh
+
+      - name: Upload benchmarks.json
+        uses: actions/upload-artifact@v4 # v4
+        with:
+          name: benchmark-results
+          path: opentelemetry-collector-contrib/testbed/tests/results/benchmarks.json
+
+  update-benchmark:
+    runs-on:
+      - codebuild-rotel-otel-loadtests-${{ github.run_id }}-${{ github.run_attempt }}
+        image:ubuntu-7.0
+        instance-size:large
+
+    needs: [run-loadtests]
+
+    permissions:
+      deployments: write
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: '0'
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 'oldstable' # one version behind?
+
+      - name: Download benchmarks.json
+        uses: actions/download-artifact@v4
+        with:
+          name: benchmark-results
+          path: opentelemetry-collector-contrib/testbed/tests/results/
+      - name: convert benchmarks
+        run: |
+          jq -s 'map(.[])' opentelemetry-collector-contrib/testbed/tests/results/benchmarks.json > output.json
+
+      - name: update results
+        env:
+          ROTEL_RELEASE: ${{ needs.run-loadtests.outputs.rotel_release }}
+          OTEL_SHA: ${{ needs.run-loadtests.outputs.otel_sha }}
+        run: |
+          # build against main
+          make build
+
+          git checkout deployed 
+          mkdir -p benchmarks
+          ./dist/benchmarks benchmarks/data.json output.json
+
+          git config --global user.name 'mheffner'
+          git config --global user.email 'mheffner@users.noreply.github.com'
+          
+          git add benchmarks/data.json
+          git commit -m "Updating benchmark data"
+          
+          git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/streamfold/rotel-otel-loadtests
+          git push origin deployed
+
+#      - uses: benchmark-action/github-action-benchmark@v1
+#        with:
+#          tool: "customSmallerIsBetter"
+#          output-file-path: output.json
+#          gh-pages-branch: gh-pages
+#          max-items-in-chart: 100
+#          github-token: ${{ secrets.GITHUB_TOKEN }}
+#          benchmark-data-dir-path: "benchmarks"
+#          auto-push: true
