@@ -1,0 +1,51 @@
+name: load-tests
+
+on:
+#  push:
+#    tags:
+#      - "v[0-9]+.[0-9]+.[0-9]+*"
+  workflow_dispatch:
+#  schedule:
+#    - cron: "27 0,12 * * *" # Run at 00:27 and 12:27 UTC every day.
+
+
+permissions: read-all
+
+jobs:
+  update-otel-contrib:
+    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    steps:
+      - name: clone otel-collector-contrib repos
+        run: |
+          git clone https://github.com/streamfold/opentelemetry-collector-contrib.git
+          cd opentelemetry-collector-contrib
+          git remote add upstream https://github.com/open-telemetry/opentelemetry-collector-contrib.git
+          git fetch upstream
+
+      - name: rebase main
+        env:
+          GITHUB_TOKEN: ${{ secrets.OTEL_COLLECTOR_CONTRIB_ACCESS }}
+        run: |
+          cd opentelemetry-collector-contrib
+          git co main
+          git pull --ff-only upstream main
+          git push origin main
+
+      - name: rebase branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.OTEL_COLLECTOR_CONTRIB_ACCESS }}
+        run: |
+          cd opentelemetry-collector-contrib
+          git co rotel-tests
+          git rebase main
+          git push -f origin rotel-tests
+
+  setup-environment:
+    needs: [update-otel-contrib]
+    runs-on: ubuntu-latest
+    steps:
+      - name: clone test branch
+        run: |
+          # Shallow clone to make this fast
+          git clone --depth 1 https://github.com/streamfold/opentelemetry-collector-contrib.git -b rotel-tests
