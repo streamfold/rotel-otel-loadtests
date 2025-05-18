@@ -337,13 +337,3 @@ jobs:
           
           git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/streamfold/rotel-otel-loadtests
           git push origin deployed
-
-#      - uses: benchmark-action/github-action-benchmark@v1
-#        with:
-#          tool: "customSmallerIsBetter"
-#          output-file-path: output.json
-#          gh-pages-branch: gh-pages
-#          max-items-in-chart: 100
-#          github-token: ${{ secrets.GITHUB_TOKEN }}
-#          benchmark-data-dir-path: "benchmarks"
-#          auto-push: true
