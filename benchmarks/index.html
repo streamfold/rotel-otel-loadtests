@@ -129,8 +129,8 @@ String.prototype.hashCode = function() {
                             label: label,
                             data: Array(30).fill(null), // Initialize with 30 null points
                             borderColor: getLabelColor(label),
-                            tension: 0.3,
-                            pointRadius: 5,
+                            tension: 0.2,
+                            pointRadius: 2,
                             pointHoverRadius: 7,
                             timestamps: Array(30).fill(null) // Store timestamps for each point
                         };
@@ -239,19 +239,29 @@ String.prototype.hashCode = function() {
         function getLabelColor(label) {
             const hc = label.hashCode();
             const hcUnsigned = hc < 0 ? -hc : hc;
-
-            const colors = [
-                '#4285F4', // Google Blue
-                '#EA4335', // Google Red
-                '#FBBC05', // Google Yellow
-                '#34A853', // Google Green
-                '#FF6D01', // Orange
-                '#46BDC6', // Teal
-                '#7B0099', // Purple
-                '#B23424', // Dark Red
-                '#1A73E8', // Light Blue
-                '#F25022'  // Bright Red
-            ];
+            // Other potential palletes to fiddle with later.
+            //const colors = ['#a6cee3', '#1f78b4', '#b2df8a', '#33a02c', '#fb9a99', '#e31a1c', '#fdbf6f', '#ff7f00', '#cab2d6', '#6a3d9a', '#ffff99', '#b15928'];
+            //const colors = ['#8dd3c7', '#bebada', '#fb8072', '#80b1d3', '#fdb462', '#b3de69', '#fccde5', '#d9d9d9', '#bc80bd', '#ccebc5', '#ffed6f'];
+            //const colors = ['#ffffd9', '#edf8b1', '#c7e9b4', '#7fcdbb', '#41b6c4', '#1d91c0', '#225ea8', '#253494', '#081d58'];
+            //const colors = ['#67001f', '#b2182b', '#d6604d', '#f4a582', '#92c5de', '#4393c3', '#2166ac', '#053061'];
+            //const colors = ['#632CA6', '#F2495C', '#FF9500', '#FFD23F', '#19CDD7', '#5BB32D', '#4463CE', '#DB61A2', '#1D9A6C', '#B854D4'];
+            //const colors = ['#7A3BB5', '#F55A68', '#FF9D20', '#FFD84A', '#2AD5DC', '#66BB3A', '#5472D6', '#E172AC', '#2BA276', '#C265DC'];
+            //const colors = ['#9e0142', '#d53e4f', '#f46d43', '#fdae61', '#fee08b', '#ffffbf', '#e6f598', '#abdda4', '#66c2a5', '#3288bd', '#5e4fa2'];
+            //const colors = ["#ea5545", "#f46a9b", "#ef9b20", "#edbf33", "#ede15b", "#bdcf32", "#87bc45", "#27aeef", "#b33dc6"];
+            //const colors = [
+            //    '#4285F4', // Google Blue
+            //    '#EA4335', // Google Red
+            //    '#FBBC05', // Google Yellow
+            //    '#34A853', // Google Green
+            //    '#FF6D01', // Orange
+            //    '#46BDC6', // Teal
+            //    '#7B0099', // Purple
+            //    '#B23424', // Dark Red
+            //    '#1A73E8', // Light Blue
+            //    '#F25022'  // Bright Red
+            //];
+            //const colors = [ '#7EB26D', '#EAB839', '#6ED0E0', '#EF843C', '#E24D42', '#1F78C1', '#BA43A9', '#705DA0', '#508642', '#CCA300', '#447EBC', '#C15C17', '#890F02', '#0A437C', '#6D1F62', '#584477' ];
+          const colors = [ '#8BB974', '#F0C147', '#7DD8E8', '#F58C4A', '#E85950', '#2F88D1', '#C451B7', '#7D6BA8', '#5A8E4A', '#D4AD08', '#5488CA', '#C96825', '#971710', '#1A538A', '#7A2F70', '#665285' ];
             return colors[hcUnsigned % colors.length];
         }
 
