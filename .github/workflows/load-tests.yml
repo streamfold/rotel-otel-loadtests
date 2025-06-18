@@ -328,6 +328,15 @@ jobs:
           mkdir -p benchmarks
           ./dist/benchmarks benchmarks/data.json output.json
 
+      - name: Upload results
+        uses: actions/upload-artifact@v4 # v4
+        with:
+          name: final-benchmark-results
+          path: benchmarks/*.json
+
+      - name: push results
+        if: false # disabling for now
+        run: |
           git config --global user.name 'mheffner'
           git config --global user.email 'mheffner@users.noreply.github.com'
           
