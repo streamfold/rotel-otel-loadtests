@@ -186,6 +186,95 @@ jobs:
           path: ${{ env.DOWNLOAD_PATH }}
           if-no-files-found: warn
 
+
+  download-fluentbit-artifacts:
+    runs-on:
+      - codebuild-rotel-otel-loadtests-${{ github.run_id }}-${{ github.run_attempt }}
+        image:ubuntu-7.0
+        instance-size:large
+    outputs:
+      fluentbit_release: ${{ steps.get-release.outputs.release_name }}
+    steps:
+      - name: Set values
+        run: |
+          echo "REPO_OWNER=streamfold" >> $GITHUB_ENV
+          echo "REPO_NAME=fluentbit-builds" >> $GITHUB_ENV
+          echo "RELEASE_PATTERN=^v.*" >> $GITHUB_ENV
+          echo "ARTIFACT_PATTERN=^fluent-bit.*.tar.gz" >> $GITHUB_ENV
+          echo "DOWNLOAD_PATH=downloads" >> $GITHUB_ENV
+
+      - name: Get latest release matching pattern
+        id: get-release
+        run: |
+          # Fetch releases and filter by pattern
+          RELEASES=$(curl -s -H "Authorization: token ${{ secrets.FLUENTBIT_DOWNLOAD_ASSETS }}" \
+            "https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/releases")
+          
+          # Find the latest release that matches the pattern
+          # Find the latest release that matches the pattern
+          # Handle null or boolean values by coalescing to empty strings for regex test
+          LATEST_RELEASE=$(echo "$RELEASES" | jq -r --arg PATTERN "$RELEASE_PATTERN" \
+            'map(select(
+              ((.name // "") | tostring | test($PATTERN)) or 
+              ((.tag_name // "") | tostring | test($PATTERN))
+            )) | sort_by(.published_at) | reverse | .[0]')
+          
+          if [ "$LATEST_RELEASE" = "null" ] || [ -z "$LATEST_RELEASE" ]; then
+            echo "No matching release found"
+            exit 1
+          fi
+          
+          # Extract relevant information
+          RELEASE_ID=$(echo "$LATEST_RELEASE" | jq -r '.id')
+          RELEASE_NAME=$(echo "$LATEST_RELEASE" | jq -r '.name')
+          RELEASE_TAG=$(echo "$LATEST_RELEASE" | jq -r '.tag_name')
+          RELEASE_URL=$(echo "$LATEST_RELEASE" | jq -r '.html_url')
+          
+          # Save to outputs and environment
+          echo "RELEASE_ID=$RELEASE_ID" >> $GITHUB_ENV
+          echo "RELEASE_NAME=$RELEASE_NAME" >> $GITHUB_ENV
+          echo "RELEASE_TAG=$RELEASE_TAG" >> $GITHUB_ENV
+          echo "RELEASE_URL=$RELEASE_URL" >> $GITHUB_ENV
+          
+          echo "release_id=$RELEASE_ID" >> $GITHUB_OUTPUT
+          echo "release_name=$RELEASE_NAME" >> $GITHUB_OUTPUT
+          echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
+          echo "release_url=$RELEASE_URL" >> $GITHUB_OUTPUT
+          
+          echo "Found matching release: $RELEASE_NAME (tag: $RELEASE_TAG)"
+
+      - name: Create download directory
+        run: mkdir -p ${{ env.DOWNLOAD_PATH }}
+
+      - name: Download release assets
+        run: |
+          # Get assets for the release
+          ASSETS=$(curl -s -H "Authorization: token ${{ secrets.FLUENTBIT_DOWNLOAD_ASSETS }}" \
+            "https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/releases/$RELEASE_ID/assets")
+          
+          # Download each matching asset
+          echo "$ASSETS" | jq -r --arg PATTERN "$ARTIFACT_PATTERN" \
+            'map(select(.name | test($PATTERN))) | .[] | "\(.id) \(.name) \(.browser_download_url)"' | \
+          while read -r ASSET_ID ASSET_NAME ASSET_URL; do
+            echo "Downloading $ASSET_NAME..."
+            curl -s -L -H "Authorization: token ${{ secrets.FLUENTBIT_DOWNLOAD_ASSETS }}" \
+              -H "Accept: application/octet-stream" \
+              "$ASSET_URL" -o "${{ env.DOWNLOAD_PATH }}/$ASSET_NAME"
+            echo "Downloaded $ASSET_NAME to ${{ env.DOWNLOAD_PATH }}/$ASSET_NAME"
+          done
+
+      - name: List downloaded files
+        run: |
+          echo "Downloaded assets from release ${{ env.RELEASE_NAME }} (tag: ${{ env.RELEASE_TAG }}):"
+          ls -la ${{ env.DOWNLOAD_PATH }}
+
+      - name: Upload artifacts to workflow
+        uses: actions/upload-artifact@v4
+        with:
+          name: fluentbit-artifacts
+          path: ${{ env.DOWNLOAD_PATH }}
+          if-no-files-found: warn
+
   run-loadtests:
     timeout-minutes: 20
     runs-on:
@@ -193,10 +282,11 @@ jobs:
         image:ubuntu-7.0
         instance-size:large
 
-    needs: [setup-environment, download-rotel-artifacts]
+    needs: [setup-environment, download-rotel-artifacts, download-fluentbit-artifacts]
 
     outputs:
       rotel_release: ${{ needs.download-rotel-artifacts.outputs.rotel_release }}
+      fluentbit_release: ${{ needs.download-fluentbit-artifacts.outputs.fluentbit_release }}
       otel_sha: ${{ needs.setup-environment.outputs.otel_sha }}
 
     steps:
@@ -224,6 +314,10 @@ jobs:
       - name: Install rotel-otel-wrapper
         run: |
           go install github.com/streamfold/rotel-otel-wrapper/cmd/rotel-otel-wrapper@bb74655f86a345d8726193a7d80618efdf99a154
+
+      - name: Install fluentbit-otel-wrapper
+        run: |
+          go install github.com/streamfold/fluentbit-otel-wrapper/cmd/fluentbit-otel-wrapper@main
 
       - name: Install go-unit-report
         run: |
@@ -258,12 +352,21 @@ jobs:
           name: rotel-artifacts
           path: ${{ env.DOWNLOAD_PATH }}
 
-      - name: extract rotel
+      - name: Download Fluentbit Artifacts
+        uses: actions/download-artifact@v4
+        env:
+          DOWNLOAD_PATH: "downloads"
+        with:
+          name: fluentbit-artifacts
+          path: ${{ env.DOWNLOAD_PATH }}
+
+      - name: extract rotel and fluentbit
         env:
           DOWNLOAD_PATH: "downloads"
         run: |
           cd ${{ env.DOWNLOAD_PATH }}
-          tar zxf *.tar.gz
+          ls -lah
+          ls *.tar.gz | xargs -n 1 tar zxf
 
       - name: Setup env
         env:
@@ -271,9 +374,14 @@ jobs:
         run: |
           echo "ROTEL_PATH=$PWD/${{ env.DOWNLOAD_PATH }}/rotel" >> $GITHUB_ENV
           echo "ROTEL_OTEL_WRAPPER=`which rotel-otel-wrapper`" >> $GITHUB_ENV
+          
+          echo "FLUENTBIT_PATH=$PWD/${{ env.DOWNLOAD_PATH }}/fluent-bit" >> $GITHUB_ENV
+          echo "FLUENTBIT_OTEL_WRAPPER=`which fluentbit-otel-wrapper`" >> $GITHUB_ENV
 
       - name: Run loadtests
         working-directory: opentelemetry-collector-contrib
+        env:
+          SKIP_FLUENTBIT_LOG10KDPS: "true"
         run: |
           export GOJUNIT=`which go-junit-report`
 
@@ -319,6 +427,7 @@ jobs:
       - name: update results
         env:
           ROTEL_RELEASE: ${{ needs.run-loadtests.outputs.rotel_release }}
+          FLUENTBIT_RELEASE: ${{ needs.run-loadtests.outputs.fluentbit_release }}
           OTEL_SHA: ${{ needs.run-loadtests.outputs.otel_sha }}
         run: |
           # build against main
@@ -326,13 +435,14 @@ jobs:
 
           git checkout deployed 
           mkdir -p benchmarks
-          ./dist/benchmarks benchmarks/data.json output.json
+          mkdir -p benchmarks-fluentbit
+          ./dist/benchmarks benchmarks/data.json benchmarks-fluentbit/data.json output.json
 
       - name: Upload results
         uses: actions/upload-artifact@v4 # v4
         with:
           name: final-benchmark-results
-          path: benchmarks/*.json
+          path: benchmarks*/data.json
 
       - name: push results
         if: false # disabling for now
@@ -340,7 +450,7 @@ jobs:
           git config --global user.name 'mheffner'
           git config --global user.email 'mheffner@users.noreply.github.com'
           
-          git add benchmarks/data.json
+          git add benchmarks/data.json benchmarks-fluentbit/data.json
           git commit -m "Updating benchmark data"
           
           git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/streamfold/rotel-otel-loadtests
