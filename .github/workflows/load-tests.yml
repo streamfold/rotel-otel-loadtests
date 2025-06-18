@@ -366,7 +366,7 @@ jobs:
         run: |
           cd ${{ env.DOWNLOAD_PATH }}
           ls -lah
-          tar zxf *.tar.gz
+          ls *.tar.gz | xargs -n 1 tar zxf
 
       - name: Setup env
         env:
