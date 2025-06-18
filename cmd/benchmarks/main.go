@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -40,16 +41,22 @@ type BenchmarkResult struct {
 }
 
 func main() {
-	if len(os.Args) != 3 {
-		log.Fatalf("Usage: benchmarks <data.json> <output.json>")
+	if len(os.Args) != 4 {
+		log.Fatalf("Usage: benchmarks <data.json> <data-fluentbit.json> <output.json>")
 	}
 
 	dataJson := os.Args[1]
-	outputJson := os.Args[2]
+	dataFluentBitJson := os.Args[2]
+	outputJson := os.Args[3]
 
 	rotelRelease := os.Getenv("ROTEL_RELEASE")
 	if rotelRelease == "" {
 		log.Fatalf("Must set ROTEL_RELEASE")
+	}
+
+	fluentBitRelease := os.Getenv("FLUENTBIT_RELEASE")
+	if fluentBitRelease == "" {
+		log.Fatalf("Must set FLUENTBIT_RELEASE")
 	}
 
 	otelSha := os.Getenv("OTEL_SHA")
@@ -57,6 +64,22 @@ func main() {
 		log.Fatalf("Must set OTEL_SHA")
 	}
 
+	// Process OTEL + Rotel results
+	xLabel := fmt.Sprintf("%s - %s", otelSha, rotelRelease)
+	excludeFilterRe := regexp.MustCompile(`^Fluentbit`)
+	generateData(dataJson, outputJson, xLabel, func(s string) bool {
+		return !excludeFilterRe.MatchString(s)
+	})
+
+	// Process Rotel + Fluentbit results
+	xLabel = fmt.Sprintf("%s - %s", fluentBitRelease, rotelRelease)
+	includeFilterRe := regexp.MustCompile(`^(Rotel|Fluentbit)`)
+	generateData(dataFluentBitJson, outputJson, xLabel, func(s string) bool {
+		return includeFilterRe.MatchString(s)
+	})
+}
+
+func generateData(dataJson string, outputJson string, xLabel string, resultFilter func(string) bool) {
 	benchmarkData := Benchmark{
 		Data: nil,
 	}
@@ -95,7 +118,7 @@ func main() {
 	_ = f.Close()
 
 	dp := DataPoint{
-		XLabel:    fmt.Sprintf("%s - %s", otelSha, rotelRelease),
+		XLabel:    xLabel,
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 		Points:    nil,
 	}
@@ -104,6 +127,11 @@ func main() {
 		sp := strings.Split(result.Extra, "/")
 		if len(sp) != 2 {
 			log.Fatalf("invalid extra benchmark result data: %s", result.Extra)
+		}
+
+		// Keep only the results we need for this dataset
+		if !resultFilter(sp[1]) {
+			continue
 		}
 
 		labelSp := strings.Split(sp[1], " - ")
