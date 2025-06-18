@@ -435,13 +435,14 @@ jobs:
 
           git checkout deployed 
           mkdir -p benchmarks
-          ./dist/benchmarks benchmarks/data.json benchmarks/data-fluentbit.json output.json
+          mkdir -p benchmarks-fluentbit
+          ./dist/benchmarks benchmarks/data.json benchmarks-fluentbit/data.json output.json
 
       - name: Upload results
         uses: actions/upload-artifact@v4 # v4
         with:
           name: final-benchmark-results
-          path: benchmarks/*.json
+          path: benchmarks*/data.json
 
       - name: push results
         if: false # disabling for now
@@ -449,7 +450,7 @@ jobs:
           git config --global user.name 'mheffner'
           git config --global user.email 'mheffner@users.noreply.github.com'
           
-          git add benchmarks/data.json benchmarks/data-fluentbit.json
+          git add benchmarks/data.json benchmarks-fluentbit/data.json
           git commit -m "Updating benchmark data"
           
           git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/streamfold/rotel-otel-loadtests
