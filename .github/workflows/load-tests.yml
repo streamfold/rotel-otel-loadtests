@@ -445,7 +445,7 @@ jobs:
           path: benchmarks*/data.json
 
       - name: push results
-        if: false # disabling for now
+        if: true # disable here to turn off publishing
         run: |
           git config --global user.name 'mheffner'
           git config --global user.email 'mheffner@users.noreply.github.com'
