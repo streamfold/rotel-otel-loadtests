@@ -124,13 +124,14 @@ func generateData(dataJson string, outputJson string, xLabel string, resultFilte
 	}
 
 	for _, result := range results {
-		if !resultFilter(result.Extra) {
-			continue
-		}
-
 		sp := strings.Split(result.Extra, "/")
 		if len(sp) != 2 {
 			log.Fatalf("invalid extra benchmark result data: %s", result.Extra)
+		}
+
+		// Keep only the results we need for this dataset
+		if !resultFilter(sp[1]) {
+			continue
 		}
 
 		labelSp := strings.Split(sp[1], " - ")
