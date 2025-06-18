@@ -198,9 +198,9 @@ jobs:
       - name: Set values
         run: |
           echo "REPO_OWNER=streamfold" >> $GITHUB_ENV
-          echo "REPO_NAME=fluentbit-builds" >> $GITHUB_ENV                    # TODO
-          echo "RELEASE_PATTERN=^v0.*" >> $GITHUB_ENV                         # TODO
-          echo "ARTIFACT_PATTERN=^rotel_v.*x86_64.*linux.*" >> $GITHUB_ENV    # TODO
+          echo "REPO_NAME=fluentbit-builds" >> $GITHUB_ENV
+          echo "RELEASE_PATTERN=^v.*" >> $GITHUB_ENV
+          echo "ARTIFACT_PATTERN=^fluent-bit.*.tar.gz" >> $GITHUB_ENV
           echo "DOWNLOAD_PATH=downloads" >> $GITHUB_ENV
 
       - name: Get latest release matching pattern
@@ -375,7 +375,7 @@ jobs:
           echo "ROTEL_PATH=$PWD/${{ env.DOWNLOAD_PATH }}/rotel" >> $GITHUB_ENV
           echo "ROTEL_OTEL_WRAPPER=`which rotel-otel-wrapper`" >> $GITHUB_ENV
           
-          echo "FLUENTBIT_PATH=$PWD/${{ env.DOWNLOAD_PATH }}/fluentbit" >> $GITHUB_ENV
+          echo "FLUENTBIT_PATH=$PWD/${{ env.DOWNLOAD_PATH }}/fluent-bit" >> $GITHUB_ENV
           echo "FLUENTBIT_OTEL_WRAPPER=`which fluentbit-otel-wrapper`" >> $GITHUB_ENV
 
       - name: Run loadtests
